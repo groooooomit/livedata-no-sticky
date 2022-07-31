@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "LiveDataNoSticky"
-include ':app'
+include(":app")
