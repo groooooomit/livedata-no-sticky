@@ -6,9 +6,12 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.Observer
 
 /**
- * 零入侵解决 [LiveData] 在 event 场景下的粘性数据问题
+ * 零入侵零反射解决 [LiveData] 在 event 场景下的粘性数据问题
  *
- * 原理：既然不能入侵（魔改） [LiveData]，那就对 [Observer] 做文章，以静态代理的方式包装 [Observer]，当 [Observer.onChanged] 被回调时判定其参数是否是粘性数据，如果是就忽略不处理
+ * 原理：既然不能入侵（魔改） [LiveData]，那就对 observer 做文章，以静态代理的方式包装 [Observer]，当 [Observer.onChanged] 被回调时判定其参数是否是粘性数据，如果是就忽略不处理
+ *
+ * 判定依据：liveData 订阅（即执行 [LiveData.observe]）前一刻 liveData 有了数据（即被执行过 setValue，[LiveData.mVersion] 不再是 [LiveData.START_VERSION]），且 observer 处于 active 状态（详见 [LiveData.ObserverWrapper.shouldBeActive]），
+ * 那么订阅时会立即触发 [Observer.onChanged] 执行，此时认为第一次在 onChanged 收到的参数就是粘滞数据
  *
  * ‼️ 该方法中 [owner] 通过 [LifecycleOwner.activeWhenCreated] 扩宽了 [LiveData.LifecycleBoundObserver.shouldBeActive] 判定为 true 的范围；
  * 目的在于实时接收并处理 event. 即当 [androidx.lifecycle.Lifecycle.getCurrentState] 处于 [androidx.lifecycle.Lifecycle.State.CREATED] 就开始接收 LiveData 数据，
@@ -16,11 +19,16 @@ import androidx.lifecycle.Observer
  *
  * 实时接收并处理 Event 的原因：
  *
- * 1、此处防止数据粘滞的方案原理是识别粘滞数据并跳过对它的处理，如果在 liveData.observe(...) 发生到 observer.active 发生的时间区间内 [LiveData.setValue] 被触发，那么该行为不能够被 [NoStickyObserverWrapper] 有效感知
+ * 1、此处防止数据粘滞的方案原理是识别粘滞数据并跳过对它的处理，如果在 inactive 时间区间内（即 observer observe ～ observer 状态达到 active 这个时间区间）[LiveData.setValue] 被触发，那么该行为不能够被 [NoStickyObserverWrapper] 有效感知
  * （因为处于 inactive 状态，[LiveData.dispatchingValue] -> [LiveData.considerNotify] -> [LiveData.ObserverWrapper.shouldBeActive] 为 false，所以不会回调 [Observer.onChanged]）
  * 进而会导致跳过了非粘性数据的 bug 发生。
  *
- * 2、event 的场景有别于 state 的场景，前者更加倾向于即时消费数据，不用延迟到 owner 处于 STARTED 状态再接收数据。虽然可以通过更加复杂的判定方案实现更加完美的粘滞数据判定，但 activeWhenCreated 方案原理简单直接，契合 event 场景，且避免了过度复杂的设计
+ * 2、event 的场景有别于 state 的场景，前者更加倾向于即时消费数据，不用延迟到 owner 处于 STARTED 状态再接收数据。虽然可以通过更加复杂的判定方案实现更加完美的粘滞数据判定，
+ * 但 activeWhenCreated 方案原理简单直接，契合 event 场景，且避免了过度复杂的设计
+ *
+ * （复杂方案之一：NoStickyObserverWrapper 构造时持有 liveData 引用，observe 时读取一次 [LiveData.mVersion] 的值并记录（反射读取），[NoStickyObserverWrapper.onChanged] 第一次执行时读取 [LiveData.mVersion] 的值，
+ * 两者进行比较，根据变化就能知道 inactive 期间是否有被 setValue）
+ * （复杂方案之二：如果不使用反射，那么在 NoStickyObserverWrapper inactive 期间通过额外执行一次 observeForever 来辅助监视 liveData 的数据变化，当 NoStickyObserverWrapper 状态变更为 active 状态后移除 observeForever 相关配置。。。不推荐，复杂度急剧升高）
  *
  * ⚠️ 在试图通过 [LiveData.removeObservers] 方法移除 observer 时不能将 [NoStickyObserverWrapper] 真正移除。通常情况下 observer 会随着 owner 持有的 lifecycle 的 destroy 自动移除；
  * 非要手动移除 observer 合理的做法是通过 [observeNoSticky]（或 [observeForeverNoSticky]） 的返回值得到最终的 observer，再通过 [LiveData.removeObserver] 进行手动移除
@@ -39,9 +47,11 @@ fun <T> LiveData<T>.observeNoSticky(
 }
 
 /**
- * 对 [LiveData.observeForever] 的包装，跳过粘滞数据，只接收 observe 之后的新数据，对 [LiveData] 不会有任何特殊要求
+ * 零入侵零反射解决 [LiveData] 在 event 场景下的粘性数据问题
  *
- * @return 返回实际传入 LiveData 的 Observer，用于进行后续的 [LiveData.removeObserver] 操作
+ * 通过 [LiveData.observeForever] 订阅数据的 observer 是一直处于 active 状态的，详见 [LiveData.AlwaysActiveObserver]
+ *
+ * @return 返回实际传入 LiveData 的 observer，用于进行后续的 [LiveData.removeObserver] 操作
  */
 fun <T> LiveData<T>.observeForeverNoSticky(
     observer: Observer<in T>
@@ -59,6 +69,8 @@ fun <T> LiveData<T>.observeForeverNoSticky(
  * 如果 LiveData 已经有了有效数据（[LiveData.mData] 已经不是 [LiveData.NOT_SET], 或 [LiveData.mVersion] 已经不是 [LiveData.START_VERSION]），
  * 那么执行 [LiveData.observeForever] 方法时其内部会立即触发 [Observer.onChanged] 执行，
  * 利用这个特性得以实现在不魔改 LiveData 的前提下感知 liveData 内部数据状态
+ *
+ * （如果能接受使用反射，那么也可以直接反射读取 [LiveData.mVersion] 看它是不是 [LiveData.START_VERSION]）
  */
 fun LiveData<*>.hasValue(): Boolean {
     var hasValue = false
