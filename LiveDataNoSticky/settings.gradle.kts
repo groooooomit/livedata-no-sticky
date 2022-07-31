@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "LiveDataNoSticky"
 include(":app")
+include(":livedata-no-sticky")
