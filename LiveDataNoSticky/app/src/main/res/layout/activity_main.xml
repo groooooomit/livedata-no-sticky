@@ -15,10 +15,26 @@
         tools:text="Hello World!" />
 
     <TextView
+        android:id="@+id/txt_data2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:textSize="20sp"
+        tools:text="Hello World!" />
+
+    <TextView
         android:id="@+id/txt_noSticky"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="40dp"
+        android:layout_marginTop="20dp"
+        android:textSize="20sp"
+        tools:text="Hello World!" />
+
+    <TextView
+        android:id="@+id/txt_noSticky2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
         android:textSize="20sp"
         tools:text="Hello World!" />
 
@@ -26,7 +42,7 @@
         android:id="@+id/bt_count"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="40dp"
+        android:layout_marginTop="20dp"
         android:text="count"
         android:textAllCaps="false" />
 
